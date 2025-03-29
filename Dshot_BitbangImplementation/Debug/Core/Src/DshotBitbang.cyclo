@@ -1,0 +1,5 @@
+../Core/Src/DshotBitbang.c:8:6:DshotOutputMode_init	1
+../Core/Src/DshotBitbang.c:14:6:MemBuffer_init	3
+../Core/Src/DshotBitbang.c:24:10:calculateCRCandTelemtryBit	1
+../Core/Src/DshotBitbang.c:28:10:getDshotFrame	1
+../Core/Src/DshotBitbang.c:32:6:DshotFrameToMemBuffer	3

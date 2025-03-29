@@ -1,0 +1,6 @@
+../Core/Src/DshotPWM.c:9:6:HAL_TIM_PWM_PulseFinishedHalfCpltCallback	24	static
+../Core/Src/DshotPWM.c:19:10:Dshot_CalculateCRCandTelemtryBit	16	static
+../Core/Src/DshotPWM.c:23:10:Dshot_GetDshotFrame	24	static
+../Core/Src/DshotPWM.c:28:6:Dshot_DMABuffer_init	24	static
+../Core/Src/DshotPWM.c:34:6:Dshot_MemoryBuffer_init	24	static
+../Core/Src/DshotPWM.c:41:6:Dshot_DshotFrame_to_buffer	24	static
