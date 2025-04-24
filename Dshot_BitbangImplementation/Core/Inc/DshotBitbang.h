@@ -11,8 +11,7 @@
  * Do bộ nhớ DMA ở chế độ memory to peripheral -> cứ 1 xung nhịp clock trôi qua sẽ nhả 1 phần tử trong array DMA
  * -> array của DMA sẽ có 8 * 18 phần tử. 8 là số xung nhịp cần thiết để qua 1 bit, 18 là sô bit trong 1 frame (thực tế là 16 nhưng lấy dôi ra 18).
  *
- * Sau gửi tín hiệu đến ESC, FC sẽ chuyển GPIO từ input sang output qua callback của DMA (chưa implement)
- * Thư viện đã nạp được vào DMA_Buffer giá trị theo dự đoán, nhưng vẫn chưa hiện tín hiệu mong muốn qua pin gpio -
+ * Thư viện đã thành công trong việc gửi tín hiệu từ fc->esc, chuyển dma, timer, gpio của fc thành input để nhận giá trị eRPM từ esc, nhưng chưa giải mã được tín hiệu đi về chính xác
  */
 
 #define SET_GPIO_PIN_9 GPIO_PIN_9
@@ -24,7 +23,13 @@
 #define BIT_0_HIGH_SECTION_NUMBER  3 - 1
 #define FRAME_BIT_NUMBER  18
 
-extern uint32_t DMA_Buffer[FRAME_BIT_NUMBER * BIT_SECTION_NUMBER];
+#define MOTOR_POLES_NUMBER				14
+#define DSHOT_BITRATE					300
+#define BDSHOT_RESPONSE_BITRATE			DSHOT_BITRATE * (5/4) //400 kbit
+#define BDSHOT_RESPONSE_LENGTH			21
+#define TIMER_TICK_PER_SECOND			BIT_SECTION_NUMBER * DSHOT_BITRATE //2.4 MHz
+#define TIMER_TICK_PER_BIT				TIMER_TICK_PER_SECOND / BDSHOT_RESPONSE_BITRATE //6
+
 extern DMA_HandleTypeDef hdma_tim1_up;
 extern TIM_HandleTypeDef htim1;
 void DshotOutputMode_init();
@@ -34,6 +39,7 @@ uint16_t calculateCRCandTelemtryBit(uint16_t value);
 uint16_t getDshotFrame(uint16_t value);
 void DshotFrameToMemBuffer(uint16_t DshotFrame, uint32_t *MemoryBuffer);
 
-
+uint32_t get_BDshot_response(uint32_t raw_buffer[], const uint8_t motor_shift);
+uint16_t read_BDshot_response(uint32_t value);
 
 #endif /* INC_DSHOTBITBANG_H_ */

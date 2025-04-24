@@ -32,7 +32,18 @@
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
 uint32_t value;
-uint8_t swapFlag;
+uint16_t rpm;
+volatile uint8_t TXFull;
+
+typedef enum {
+    STATE_TX_INIT,              // Preparing to start TX
+    STATE_TX_TRANSFERING,              // TX transfer in progress
+    STATE_RX_INIT,              // RX transfer in progress
+    STATE_RX_TRANSFERING,  // RX done, preparing for next TX (or back to IDLE)
+} AppState_t;
+
+volatile AppState_t appState = STATE_TX_INIT; // Global state variable
+
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -45,7 +56,8 @@ TIM_HandleTypeDef htim1;
 DMA_HandleTypeDef hdma_tim1_up;
 
 /* USER CODE BEGIN PV */
-uint32_t Memory_Buffer[FRAME_BIT_NUMBER * BIT_SECTION_NUMBER] = {0};
+uint32_t DMA_Buffer[FRAME_BIT_NUMBER * BIT_SECTION_NUMBER] = {0};
+uint32_t RX_Buffer[200];
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -61,15 +73,20 @@ static void MX_TIM1_Init(void);
 /* USER CODE BEGIN 0 */
 void HAL_DMA_TxCpltCallback(DMA_HandleTypeDef *hdma)
 {
-    if (hdma == &hdma_tim1_up)
+    if (hdma->Instance == DMA2_Stream5)
     {
-    	if (swapFlag){
-    		for (int i = 0; i < FRAME_BIT_NUMBER * BIT_SECTION_NUMBER; i++)
-    		{
-    			Memory_Buffer[i] = DMA_Buffer[i];
-    		}
-    	}
-    	swapFlag = 0;
+    	/*
+        GPIOE->MODER &= ~GPIO_MODER_MODER9;
+        GPIOE->PUPDR |= GPIO_PUPDR_PUPDR9_0;
+        DMA2_Stream5->CR |= DMA_SxCR_DIR_1;
+        HAL_TIM_Base_Start(&htim1);
+        HAL_DMA_Start_IT(&hdma_tim1_up, (uint32_t)RxBuffer, (uint32_t)&(GPIOE->IDR), 105);
+		//TIM1->EGR |= TIM_EGR_UG;
+		HAL_TIM_Base_Start(&htim1);*/
+    	if (appState == STATE_TX_TRANSFERING) appState = STATE_RX_INIT;
+    	else if (appState == STATE_RX_TRANSFERING) appState = STATE_TX_INIT;
+
+
     }
 }
 /* USER CODE END 0 */
@@ -82,14 +99,12 @@ int main(void)
 {
 
   /* USER CODE BEGIN 1 */
-
   /* USER CODE END 1 */
 
   /* MCU Configuration--------------------------------------------------------*/
 
   /* Reset of all peripherals, Initializes the Flash interface and the Systick. */
-
-	HAL_Init();
+  HAL_Init();
 
   /* USER CODE BEGIN Init */
 
@@ -107,42 +122,87 @@ int main(void)
   MX_DMA_Init();
   MX_TIM1_Init();
   /* USER CODE BEGIN 2 */
-  DshotOutputMode_init();
-  MemBuffer_init(Memory_Buffer);
-  MemBuffer_init(DMA_Buffer);
-  TIM1->DIER |= (1<<8);
+  hdma_tim1_up.XferCpltCallback = HAL_DMA_TxCpltCallback;
 
-  uint32_t lastTime = 0;
-  uint8_t state = 0;  // 0 for 48, 1 for 1046
+
+  MemBuffer_init(DMA_Buffer);
+
   /* USER CODE END 2 */
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
+  appState = STATE_TX_INIT;
   while (1)
   {
+	  	value = 48;
+
+	  	DshotFrameToMemBuffer(getDshotFrame(value), DMA_Buffer);
+	  	rpm = read_BDshot_response(get_BDshot_response(RX_Buffer, 9));
+		switch (appState){
+			case STATE_TX_INIT:
+				//Tat timer
+				HAL_TIM_Base_Stop(&htim1);
+
+				//Chuyen GPIO sang output, no pullup pulldown
+				GPIOE->MODER &= ~GPIO_MODER_MODER9;
+	            GPIOE->MODER |= GPIO_MODER_MODER9_0; // Output mode (01)
+	            //Tat DMA
+			    __HAL_DMA_DISABLE(&hdma_tim1_up);
+
+				//Cai dat cho DMA
+				hdma_tim1_up.Init.Direction = DMA_MEMORY_TO_PERIPH;
+				hdma_tim1_up.Init.MemInc = DMA_MINC_ENABLE;
+				hdma_tim1_up.Init.PeriphInc = DMA_PINC_DISABLE;
+				hdma_tim1_up.Init.PeriphDataAlignment = DMA_PDATAALIGN_WORD;
+				hdma_tim1_up.Init.MemDataAlignment = DMA_MDATAALIGN_WORD;
+				HAL_DMA_Init(&hdma_tim1_up);
+
+				//Bat dma va timer
+				HAL_DMA_Start_IT(&hdma_tim1_up, (uint32_t)DMA_Buffer, (uint32_t)&(GPIOE->BSRR), FRAME_BIT_NUMBER * BIT_SECTION_NUMBER);
+				TIM1->EGR |= TIM_EGR_UG;
+				HAL_TIM_Base_Start(&htim1);
+				appState = STATE_TX_TRANSFERING;
+				break;
+
+			case STATE_TX_TRANSFERING:
+				break;
+
+			case STATE_RX_INIT:
+				//Tat timer
+				HAL_TIM_Base_Stop(&htim1);
+				//Chuyen gpio sang input mode, pull up
+				GPIOE->MODER &= ~GPIO_MODER_MODER9;
+	            GPIOE->PUPDR &= ~GPIO_PUPDR_PUPDR9; // Clear pull-up/down bits
+	            GPIOE->PUPDR |= GPIO_PUPDR_PUPDR9_0; // Example: Enable Pull-up (01)
+
+				//Cai dat lai DMA
+				hdma_tim1_up.Init.Direction = DMA_PERIPH_TO_MEMORY;
+				hdma_tim1_up.Init.MemInc = DMA_MINC_ENABLE;
+				hdma_tim1_up.Init.PeriphInc = DMA_PINC_DISABLE;
+				hdma_tim1_up.Init.PeriphDataAlignment = DMA_PDATAALIGN_WORD;
+				hdma_tim1_up.Init.MemDataAlignment = DMA_MDATAALIGN_WORD;
+				HAL_DMA_Init(&hdma_tim1_up);
+
+				//Bat dma va timer
+				HAL_DMA_Start_IT(&hdma_tim1_up, (uint32_t)&(GPIOE->IDR), (uint32_t)RX_Buffer, 200);
+				TIM1->EGR |= TIM_EGR_UG;
+				HAL_TIM_Base_Start(&htim1);
+				appState = STATE_RX_TRANSFERING;
+				GPIOE->ODR |= GPIO_ODR_OD9;
+				break;
+
+			case STATE_RX_TRANSFERING:
+				break;
+
+
+		}
+
+
     /* USER CODE END WHILE */
-	    uint32_t currentTime = HAL_GetTick();
-
-	    if (state == 0)
-	    {
-	        value = 48;
-	        if (currentTime - lastTime >= 2000)  //số 48 là tương đương với 0 trong dshot. dshot yêu cầu phải chuyền tín hiệu 0 trong vài giây để calibrate
-	        {
-	            lastTime = currentTime;
-	            state = 1;
-	        }
-	    }
-	    else
-	    {
-	        value = 248;
-	    }
-
-	    DshotFrameToMemBuffer(value, Memory_Buffer);
-	    swapFlag = 1;
-		HAL_DMA_Start_IT(&hdma_tim1_up, (uint32_t)DMA_Buffer, (uint32_t)&(GPIOE->BSRR), FRAME_BIT_NUMBER * BIT_SECTION_NUMBER);
 
     /* USER CODE BEGIN 3 */
   }
+  /* USER CODE END 3 */
 }
 
 /**
@@ -213,7 +273,7 @@ static void MX_TIM1_Init(void)
   htim1.Instance = TIM1;
   htim1.Init.Prescaler = 1-1;
   htim1.Init.CounterMode = TIM_COUNTERMODE_UP;
-  htim1.Init.Period = 168000/BitRate/BitSectionNumber;
+  htim1.Init.Period = 168000/BitRate/BitSectionNumber -1;
   htim1.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
   htim1.Init.RepetitionCounter = 0;
   htim1.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
@@ -259,7 +319,7 @@ static void MX_TIM1_Init(void)
     Error_Handler();
   }
   /* USER CODE BEGIN TIM1_Init 2 */
-
+  __HAL_TIM_ENABLE_DMA(&htim1, TIM_DMA_UPDATE);
   /* USER CODE END TIM1_Init 2 */
 
 }
@@ -303,7 +363,7 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Pin = GPIO_PIN_9;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
-  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_HIGH;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_MEDIUM;
   HAL_GPIO_Init(GPIOE, &GPIO_InitStruct);
 
 /* USER CODE BEGIN MX_GPIO_Init_2 */
@@ -311,6 +371,7 @@ static void MX_GPIO_Init(void)
 }
 
 /* USER CODE BEGIN 4 */
+
 
 /* USER CODE END 4 */
 
