@@ -44,7 +44,7 @@ void DshotFrameToMemBuffer(uint16_t DshotFrame, uint32_t *MemoryBuffer){
 
 uint32_t get_BDshot_response(uint32_t raw_buffer[], const uint8_t motor_shift)
 {
-    uint32_t* buffer_end = raw_buffer + 200;
+    uint32_t* buffer_end = raw_buffer + 300;
     while (raw_buffer < buffer_end)
     {
         // reception starts just after transmission, so there is a lot of HIGH samples. Find first LOW bit:
@@ -67,7 +67,7 @@ uint32_t get_BDshot_response(uint32_t raw_buffer[], const uint8_t motor_shift)
                     __builtin_expect((*raw_buffer++ & (1 << motor_shift)), 0))
                 {
                     if (raw_buffer <= buffer_end) {
-                        uint8_t len = MAX((raw_buffer - buffer_previous) / 6, 1); // how many bits has the same value (for int rounding 1 is added)
+                        uint8_t len = MAX(((raw_buffer - buffer_previous)+3) / 6, 1); // how many bits has the same value (for int rounding 1 is added)
                         bits += len;
                         motor_response <<= len;
                         buffer_previous = raw_buffer - 1;
@@ -79,7 +79,7 @@ uint32_t get_BDshot_response(uint32_t raw_buffer[], const uint8_t motor_shift)
                                 __builtin_expect(!(*raw_buffer++ & (1 << motor_shift)), 0) ||
                                 __builtin_expect(!(*raw_buffer++ & (1 << motor_shift)), 0)) {
                                 if (raw_buffer <= buffer_end) {
-                                    len = MAX((raw_buffer - buffer_previous) / 6, 1); // how many bits has the same value (for int rounding 1 is added)
+                                    len = MAX(((raw_buffer - buffer_previous)+3) / 6, 1); // how many bits has the same value (for int rounding 1 is added)
                                     bits += len;
                                     motor_response <<= len;
                                     motor_response |= 0x1FFFFF >> (BDSHOT_RESPONSE_LENGTH - len);
@@ -102,6 +102,8 @@ uint32_t get_BDshot_response(uint32_t raw_buffer[], const uint8_t motor_shift)
     // if LOW edge was not found return incorrect motor response:
     return 0xFFFFFFFF;
 }
+
+
 static uint8_t BDshot_check_checksum(uint16_t value)
 {
     // BDshot frame has 4 last bits CRC:
@@ -114,8 +116,14 @@ static uint8_t BDshot_check_checksum(uint16_t value)
         return 0;
     }
 }
+#define iv 0xFFFFFFFF
+static const uint32_t GCR_table[32] = {
+        iv, iv, iv, iv, iv, iv, iv, iv,
+		iv, 9, 10, 11, iv, 13, 14, 15,
+		iv, iv, 2, 3, iv, 5, 6, 7,
+		iv, 0, 8, 1, iv, 4, 12, iv};
 
-uint16_t read_BDshot_response(uint32_t value)
+uint16_t rawBdShot_to_raw16bit(uint32_t value, uint16_t* last_known_rpm)
 {
     // BDshot frame contain 21 bytes but first is always 0 (used only for detection).
     // Next 20 bits are 4 sets of 5-bits which are mapped with 4-bits real value.
@@ -124,30 +132,50 @@ uint16_t read_BDshot_response(uint32_t value)
 
     // put nibbles in the array in places of mapped values (to reduce empty elements smallest mapped value will always be subtracted)
     // now it is easy to create real value - mapped value indicate array element which contain nibble value:
-#define iv 0xFFFFFFFF
-    static const uint32_t GCR_table[32] = {
-        iv, iv, iv, iv, iv, iv, iv, iv, iv, 9, 10, 11, iv, 13, 14, 15,
-        iv, iv, 2, 3, iv, 5, 6, 7, iv, 0, 8, 1, iv, 4, 12, iv};
 
-    value = (value ^ (value >> 1)); // now we have GCR value
-    uint16_t motors_rpm;
-    uint32_t decoded_value = GCR_table[(value & 0x1F)];
-    decoded_value |= GCR_table[((value >> 5) & 0x1F)] << 4;
-    decoded_value |= GCR_table[((value >> 10) & 0x1F)] << 8;
-    decoded_value |= GCR_table[((value >> 15) & 0x1F)] << 12;
+	if (value == 0xFFFFFFFF){
+		return *last_known_rpm;
+	}
 
-    // if wrongly decoded decoded_value will be bigger than uint16_t:
-    if (decoded_value < 0xFFFF && BDshot_check_checksum(decoded_value))
-    {
-        // if checksum is correct real save real RPM.
-        // value sent by ESC is a period between each pole changes [us].
-        // to achive eRPM we need to find out how many of these changes are in one minute.
-        // eRPM = (60*1000 000)/T_us next RPM can be achived -> RPM = eRPM/(poles/2):
+    value = (value ^ (value >> 1)); // 21BIT -> bit 0 and 20bit
+    value = value & 0xFFFFF; // bit 0 and 20 bits to 20 bits
+    uint16_t decoded_value = 0;
+    for (int i = 0; i <= 3; i++){
+    	uint8_t GRC_code = (value >> (15-i*5)) & 0x1F;
+    	int nibble = GCR_table[GRC_code];
 
-    	motors_rpm = ((decoded_value & 0x1FF0) >> 4) << (decoded_value >> 13);      // cut off CRC and add shifting - this is period in [us]
-        motors_rpm = 60 * 1000000 / motors_rpm * 2 / MOTOR_POLES_NUMBER; // convert to RPM
+    	if (nibble == iv) return *last_known_rpm;
+    	decoded_value = (decoded_value << 4) | (nibble & 0xF);
 
     }
-    return motors_rpm;
+    *last_known_rpm = decoded_value;
+
+    return decoded_value;
 }
+
+uint16_t raw16bit_to_motorRpm(uint16_t raw16bit, volatile uint16_t* last_rpm_val){
+	//CRC check
+	if(BDshot_check_checksum(raw16bit)){
+		//CRC check is correct -> remove the 4 crc bits
+		uint16_t raw12bit = (raw16bit) >> 4; //eee mmmmmmmmm
+		if (raw12bit == 0xFFF) {
+			*last_rpm_val = 0;
+			return 0; 	 //Special case -> 0 RPM
+		}
+
+		raw12bit = (raw12bit & 0x1FF) << (raw12bit >>9);
+
+		if (!raw12bit) return -1;
+
+		uint16_t mechanical_rpm = ((60000000 + 50 * raw12bit) / raw12bit)/7;
+		*last_rpm_val = mechanical_rpm;
+		return mechanical_rpm;
+
+	}
+	else{
+		return *last_rpm_val;
+	}
+
+}
+
 

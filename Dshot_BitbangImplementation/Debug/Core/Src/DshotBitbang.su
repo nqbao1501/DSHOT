@@ -4,5 +4,6 @@
 ../Core/Src/DshotBitbang.c:28:10:getDshotFrame	24	static
 ../Core/Src/DshotBitbang.c:32:6:DshotFrameToMemBuffer	24	static
 ../Core/Src/DshotBitbang.c:45:10:get_BDshot_response	40	static
-../Core/Src/DshotBitbang.c:105:16:BDshot_check_checksum	16	static
-../Core/Src/DshotBitbang.c:118:10:read_BDshot_response	24	static
+../Core/Src/DshotBitbang.c:107:16:BDshot_check_checksum	16	static
+../Core/Src/DshotBitbang.c:126:10:rawBdShot_to_raw16bit	32	static
+../Core/Src/DshotBitbang.c:156:10:raw16bit_to_motorRpm	24	static

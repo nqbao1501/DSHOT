@@ -40,6 +40,8 @@ uint16_t getDshotFrame(uint16_t value);
 void DshotFrameToMemBuffer(uint16_t DshotFrame, uint32_t *MemoryBuffer);
 
 uint32_t get_BDshot_response(uint32_t raw_buffer[], const uint8_t motor_shift);
-uint16_t read_BDshot_response(uint32_t value);
+uint16_t rawBdShot_to_raw16bit(uint32_t value, uint16_t* last_known_value);
+uint16_t raw16bit_to_motorRpm(uint16_t raw16bit, volatile uint16_t* last_rpm_val);
+
 
 #endif /* INC_DSHOTBITBANG_H_ */
